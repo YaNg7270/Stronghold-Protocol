@@ -1,5 +1,7 @@
 # 线上版本探查脚本
 
+用途：开发计划 P2（协议采样），见 `docs/offline-plan.md`。静态代码和数据已经可以直接用 curl 抓取，这个脚本主要用来**录制真实对局的 WebSocket 帧**，以便还原服务器消息的字段结构。
+
 用 Chromium 打开线上游戏，把离线化所需的信息全部抓下来：所有静态资源、每个 HTTP 请求、WebSocket 帧、localStorage/Cookie、控制台输出、HAR 和截图。
 
 ```bash

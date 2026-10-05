@@ -57,6 +57,7 @@ export class Match {
     this.phase = PHASE.INFO_CHECK;
     this.round = 0;
     this.deadline = 0;
+    this.timerAt = 0;
     this.phaseAt = 0;
     this.startedAt = 0;
     this.over = false;
@@ -161,7 +162,7 @@ export class Match {
     return {
       phase: this.phase,
       round: this.round,
-      deadline: this.paused ? this.deadline : this.deadline,
+      deadline: this.deadline,
       serverNow: this.now(),
       modeId: this.modeId,
       difficulty: this.difficulty,
@@ -201,10 +202,16 @@ export class Match {
 
   // ---- phase machine -----------------------------------------------------------------------------------------------
 
-  setPhase(phase, ms = 0) {
+  /**
+   * Enter a phase. `ms`: when the phase machine moves on (0 = waits for the players); `shown`: the countdown the client
+   * displays (m.public.deadline, default the same; 0 = none — SETTLE / ROUND_START show none, a battle's countdown
+   * ends with the battle's own time limit while the server waits a little longer for its result).
+   */
+  setPhase(phase, ms = 0, { shown = ms } = {}) {
     this.phase = phase;
     this.phaseAt = this.now();
-    this.deadline = ms > 0 ? this.phaseAt + ms : 0;
+    this.timerAt = ms > 0 ? this.phaseAt + ms : 0;
+    this.deadline = shown > 0 ? this.phaseAt + shown : 0;
     this.publicDirty = true;
     for (const p of this.players) p.touch();
   }
@@ -218,7 +225,7 @@ export class Match {
     if (this.over) return;
     if (this.paused) return;
     if (this.phase === PHASE.FINAL_ASSAULT || this.phase === PHASE.HIDDEN_CORE) this._bossTick(now);
-    if (this.deadline && now >= this.deadline) this._onDeadline(now);
+    if (this.timerAt && now >= this.timerAt) this._onDeadline(now);
     this.flush();
   }
 
@@ -231,11 +238,10 @@ export class Match {
       case PHASE.COMBAT: this._combatTimeout(now); break;
       case PHASE.FINAL_ASSAULT:
       case PHASE.HIDDEN_CORE:
-        // the level countdown only: the battle goes on (overtime drain)
-        this.deadline = 0;
-        this.publicDirty = true;
+        // the level countdown only: the battle goes on (overtime drain; the client keeps showing the passed deadline)
+        this.timerAt = 0;
         break;
-      default: this.deadline = 0;
+      default: this.timerAt = 0;
     }
   }
 
@@ -282,7 +288,7 @@ export class Match {
       if (p.shop.frozen) { p.shop.frozen = false; p.topUpShop(); } else p.rollShop();
       p.touch();
     }
-    this.setPhase(PHASE.ROUND_START, ROUND_START_MS);
+    this.setPhase(PHASE.ROUND_START, ROUND_START_MS, { shown: 0 });
     for (const p of this.alivePlayers()) this.meta.roundStart(p);
     this._preparePreview();
   }
@@ -355,7 +361,10 @@ export class Match {
     const now = this.now();
     if (kind === 'normal') {
       const tl = Number(row.combatTimeLimit ?? this.mode.combatTimeLimit?.[String(this.round)]) || 60;
-      this.setPhase(phase, Math.round((tl / SPEED) * 1000) + 1500);
+      // the browser starts the battle about a second after b.start (measured ~0.9–1.0 s): the shown countdown hits 0
+      // when the battle's own time limit does
+      const real = Math.round((tl / SPEED) * 1000);
+      this.setPhase(phase, real + 2500, { shown: real + 1000 });
     } else {
       const level = Number(row.levelMaxPlayTime) || 120;
       this.setPhase(phase, level * 1000);
@@ -504,7 +513,7 @@ export class Match {
     // simulated here with the same deterministic sim and spec (the online server's takeover)
     const late = [...this.battles.values()].filter((b) => b.round === this.round && !b.done);
     if (!late.length) { this._maybeSettle(); return; }
-    if (!this._graceUntil) { this._graceUntil = now + RESULT_GRACE_MS; this.deadline = this._graceUntil; return; }
+    if (!this._graceUntil) { this._graceUntil = now + RESULT_GRACE_MS; this.timerAt = this._graceUntil; return; }
     for (const b of late) this._takeover(b);
     this._graceUntil = 0;
     this._maybeSettle();
@@ -588,7 +597,7 @@ export class Match {
       for (const bt of p.bounties) bt.roundsLeft -= 1;
       p.bounties = p.bounties.filter((bt) => bt.roundsLeft > 0);
     }
-    this.setPhase(PHASE.SETTLE, SETTLE_MS);
+    this.setPhase(PHASE.SETTLE, SETTLE_MS, { shown: 0 });
   }
 
   _afterSettle() {
@@ -753,6 +762,7 @@ export class Match {
       const d = Math.max(0, now - this.pausedAt);
       this.paused = false;
       if (this.deadline) this.deadline += d;
+      if (this.timerAt) this.timerAt += d;
       if (this.overtimeAt) this.overtimeAt += d;
       if (this._graceUntil) this._graceUntil += d;
       for (const b of this.battles.values()) if (!b.done) b.startAt += d;
@@ -767,7 +777,7 @@ export class Match {
     const plain = (o) => JSON.parse(JSON.stringify(o));
     return plain({
       v: 1, modeId: this.modeId, difficulty: this.difficulty, roomMode: this.roomMode, seed: this.seed, rngState: this.rng.state(),
-      uidSeq: this.uidSeq, battleSeq: this.battleSeq, phase: this.phase, round: this.round, deadline: this.deadline,
+      uidSeq: this.uidSeq, battleSeq: this.battleSeq, phase: this.phase, round: this.round, deadline: this.deadline, timerAt: this.timerAt,
       phaseAt: this.phaseAt, startedAt: this.startedAt, paused: this.paused, pausedAt: this.pausedAt,
       stageId: this.stageId, bossId: this.bossId, hiddenBossId: this.hiddenBossId, drawnDisabledBonds: this.drawnDisabledBonds,
       disabledBonds: this.disabledBonds, bannedChess: this.bannedChess, pool: this.pool.serialize(), factions: this.factions,
@@ -786,9 +796,11 @@ export class Match {
   static restore(st, env) {
     const m = new Match({ ...env, modeId: st.modeId, difficulty: st.difficulty, roomMode: st.roomMode, seed: st.seed, players: [], restoring: true });
     m.rng = createRng(st.rngState >>> 0);
-    for (const k of ['uidSeq', 'battleSeq', 'phase', 'round', 'deadline', 'phaseAt', 'startedAt', 'paused', 'pausedAt', 'stageId', 'bossId',
+    for (const k of ['uidSeq', 'battleSeq', 'phase', 'round', 'deadline', 'timerAt', 'phaseAt', 'startedAt', 'paused', 'pausedAt', 'stageId', 'bossId',
       'hiddenBossId', 'drawnDisabledBonds', 'disabledBonds', 'bannedChess', 'factions', 'draft', 'teamLp', 'bossHp', 'overtimeAt',
       'hiddenReached', 'hiddenCleared', 'victory']) m[k] = st[k];
+    // saves from before the internal timer existed: the shown deadline was the timer
+    if (m.timerAt == null) m.timerAt = m.deadline || 0;
     m._overtimeLost = st.overtimeLost || 0;
     m._teamLpStart = st.teamLpStart;
     m._bossCleared = !!st.bossCleared;

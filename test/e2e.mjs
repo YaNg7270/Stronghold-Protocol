@@ -150,6 +150,24 @@ try {
     }
     console.log('ready', await req('g.ready', { ready: true }));
     s = await waitPhase(['COMBAT', 'FINAL_ASSAULT', 'HIDDEN_CORE']);
+    if (args.timing) {
+      // when the local battle ends compared to the countdown the HUD shows (user report: "the last 3 seconds freeze")
+      const t = await sp(async () => {
+        const { store } = globalThis.__SP__;
+        const t0 = Date.now();
+        const dl = store.get().match.public.deadline;
+        const off = store.get().clock?.offset || 0;
+        let done = null, settle = null;
+        while (Date.now() - t0 < 90000) {
+          const s = store.get();
+          if (done == null && s.match.battle && s.match.battle.done) done = Date.now() + off;
+          if (s.match.public.phase !== 'COMBAT') { settle = Date.now() + off; break; }
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        return { battleDoneVsDeadline: done && dl ? done - dl : null, settleVsDeadline: settle && dl ? settle - dl : null };
+      });
+      console.log('timing (ms, negative = before the countdown hits 0):', JSON.stringify(t));
+    }
     await page.waitForTimeout(6000);
     await shot(`r${s.round}-combat`);
     if (args.reload && r === 1) {

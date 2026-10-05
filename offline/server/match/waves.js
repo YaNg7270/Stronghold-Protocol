@@ -147,7 +147,25 @@ export function roundSpawns(match, player, round) {
       tag: 'bounty', bounty: b.payout === 'kill' ? { coins: b.coin, ownerPlayerId: player.playerId, effectId: b.effectId } : null,
     });
   }
+  spawns = spawns.map((sp) => fitRoute(match, sp, conv.routes, conv.extraRoutes || []));
   return { waveId, routes: conv.routes, spawns, maxPlayTime: conv.maxPlayTime, overrides: conv.overrides || {}, dp: tpl.dp || null, extraRoutes: conv.extraRoutes };
+}
+
+/**
+ * The route a spawn should take for its enemy's motion (the online server's waves.js routeByMotion): a flyer on a WALK
+ * route would walk the ground path (the sim takes the motion from the enemy, the path from the route) and a ground
+ * enemy cannot use a FLY route. Keeps the spawn's own route when it fits; else the nearest route of the right motion
+ * (same index first, then the template routes, then its extraRoutes — passed explicitly as `route`).
+ */
+export function fitRoute(match, s, routes, extraRoutes = []) {
+  const fly = isFly(match, s.enemyKey);
+  const want = fly ? 'FLY' : 'WALK';
+  const cur = routes[s.routeIndex ?? 0];
+  if (s.route || !cur || cur.motion === want) return s;
+  const idx = routes.findIndex((r) => r && r.motion === want);
+  if (idx >= 0) return { ...s, routeIndex: idx };
+  const extra = extraRoutes.find((r) => r && r.motion === want);
+  return extra ? { ...s, route: extra } : s;
 }
 
 /** m.private.nextEnemies entries: one per spawn action (render/pen.js). */
@@ -156,7 +174,7 @@ export function previewOf(match, spawns, routes) {
   for (const s of spawns) {
     const e = match.data.enemy(s.enemyKey);
     if (!e) continue;
-    const route = routes[s.routeIndex ?? 0] || routes[0];
+    const route = s.route || routes[s.routeIndex ?? 0] || routes[0];
     const startRow = Array.isArray(route?.start) ? route.start[0] : 9;
     out.push({
       enemyKey: s.enemyKey, count: Math.max(1, s.count || 1), t: Number(s.time) || 0,

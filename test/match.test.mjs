@@ -197,3 +197,34 @@ test('after the result the room can start another match', async () => {
   h.advance(30_000);
   assert.equal(c.state.pub.phase, 'BAND_DRAFT');
 });
+
+test('flyers always take a FLY route (bounty drones included), ground enemies a WALK route', async () => {
+  const { roundSpawns } = await import('../offline/server/match/waves.js');
+  const { match } = await inPrep({ seed: 5 });
+  const m = match();
+  const p = m.players[0];
+  p.bounties.push({ enemyKey: 'enemy_1355_mrfly_2', count: 3, coin: 2, payout: 'perfect', roundsLeft: 99, name: 'drone' });
+  const flies = (key) => { const e = m.data.enemy(key); return (e?.stats?.motion || e?.motion) === 'FLY' || !!e?.isFlyEnemy; };
+  for (let r = 1; r <= 14; r++) {
+    const w = roundSpawns(m, p, r);
+    for (const s of w.spawns) {
+      const route = s.route || w.routes[s.routeIndex ?? 0];
+      assert.equal(route?.motion === 'FLY', flies(s.enemyKey), `R${r} ${s.enemyKey}`);
+    }
+  }
+});
+
+test('the battle countdown ends with the battle; settle and round start show none', async () => {
+  const { h, c } = await inPrep();
+  c.ok('g.ready', { ready: true });
+  const pub = c.state.pub;
+  assert.equal(pub.phase, 'COMBAT');
+  const tl = h.data.mode('mode_single_normal').rounds['1'].combatTimeLimit;
+  assert.equal(pub.deadline - h.now, Math.round((tl / 2) * 1000) + 1000);
+  h.runBattles(c);
+  assert.equal(c.state.pub.phase, 'SETTLE');
+  assert.equal(c.state.pub.deadline, 0);
+  h.advance(3500);
+  assert.equal(c.state.pub.phase, 'ROUND_START');
+  assert.equal(c.state.pub.deadline, 0);
+});

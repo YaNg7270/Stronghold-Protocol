@@ -1,8 +1,8 @@
 node_modules/
 # mirrored copy of the online game (client code + ~330 MB of art); never committed — run `npm run mirror`
-mirror/
-dist/
-recon-output/
+/mirror/
+/dist/
+/recon-output/
 *.log
 # links into ./mirror (tools/link.mjs)
 /sim
@@ -10,4 +10,4 @@ recon-output/
 /js
 /data
 /data.js
-test-output/
+/test-output/

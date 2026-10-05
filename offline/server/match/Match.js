@@ -300,7 +300,13 @@ export class Match {
   _toPrep() {
     this.sp = null;
     this.setPhase(PHASE.PREP, 0);
-    for (const p of this.alivePlayers()) this.meta.prepStart(p);
+    const row = this.roundRow();
+    for (const p of this.alivePlayers()) {
+      // a boss round's prep deploys on the player's half of the boss field: pieces standing where that field has no
+      // deployable tile go back to the hand (the boss field's legend decides, like the client's placement rules)
+      if (row.isBoss || row.isHidden) p.revalidateBoard();
+      this.meta.prepStart(p);
+    }
   }
 
   /** The player readies (or every player is ready): prep ends, battles start. */
@@ -332,7 +338,7 @@ export class Match {
   _preparePreview() {
     const row = this.mode.rounds?.[String(this.round)] || {};
     for (const p of this.alivePlayers()) {
-      const w = roundSpawns(this, p, this.round, { bossLike: !!(row.isBoss || row.isHidden) });
+      const w = roundSpawns(this, p, this.round);
       p.nextEnemies = previewOf(this, w.spawns, w.routes);
       p.touch();
     }
@@ -377,7 +383,7 @@ export class Match {
     const row = this.roundRow();
     const battleId = `b${this.round}_${++this.battleSeq}`;
     const fieldId = `n:${p.playerId}`;
-    const w = roundSpawns(this, p, this.round, { bossLike: kind !== 'normal' });
+    const w = roundSpawns(this, p, this.round);
     const rect = kind === 'normal' ? { ...GEO.NORMAL_RECT } : { ...GEO.BOSS_RECT };
     const timeLimit = kind === 'normal' ? (Number(row.combatTimeLimit ?? w.maxPlayTime) || 60) : null;
     const dp = w.dp || this.data.config.dp || {};

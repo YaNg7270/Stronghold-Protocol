@@ -273,6 +273,7 @@ export class GameServer {
       push: (playerId, m) => this.pushTo(playerId, m),
     });
     room.inMatch = true;
+    room.closedAt = null;
     for (const seat of room.seats) if (seat) seat.ready = false;
     this._pushRoom(room);
     room.match.begin(this.now());
@@ -304,7 +305,7 @@ export class GameServer {
     this._savedAt = t;
     try {
       const sessions = [...this.sessions.values()].map((s) => ({ token: s.token, playerId: s.playerId, name: s.name, roomCode: s.roomCode, loadout: s.loadout }));
-      const rooms = [...this.rooms.values()].filter((r) => !r.closedAt).map((r) => ({
+      const rooms = [...this.rooms.values()].map((r) => ({
         code: r.code, mode: r.mode, difficulty: r.difficulty, hostId: r.hostId, createdAt: r.createdAt,
         seats: r.seats, inMatch: r.inMatch, match: r.match && !r.match.over ? r.match.serialize() : null,
       }));

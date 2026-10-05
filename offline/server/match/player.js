@@ -12,7 +12,7 @@
 
 import { GEO, ERR } from '../../../shared/constants.js';
 import { rangeTiles } from '../../../js/ui/facing.js';
-import { placementContext, canPlace, deployFieldOf, completesMerge, mergeTarget, handFull, equipMerges, itemAttaches } from '../../../js/ui/gameLogic.js';
+import { placementContext, canPlace, tileAllows, deployFieldOf, completesMerge, mergeTarget, handFull, equipMerges, itemAttaches } from '../../../js/ui/gameLogic.js';
 import { ServerError } from './errors.js';
 import { rollShopItem } from './pool.js';
 import { computeBonds } from './bonds.js';
@@ -685,6 +685,19 @@ export class PlayerState {
     return {};
   }
 
+  /** Withdraw the board pieces whose tile is not legal on the current deploy field (boss rounds). */
+  revalidateBoard() {
+    const ctx = this.placement();
+    const bad = this.board.filter((p) => (p.kind === 'chess' || p.kind === 'token') && !tileAllows(ctx, p, p.row, p.col));
+    for (const p of bad) {
+      if (!this.board.includes(p)) continue;
+      this.detach(p.uid);
+      if (p.kind === 'chess') this._recallTokens(p.uid);
+      this.stow(stripPos(p));
+    }
+    if (bad.length) this.match.toast(this.playerId, `${bad.length} 名干员所在位置在领袖战场上无法部署，已撤回整备区`, 'warn');
+  }
+
   /** A swapped-out piece goes where the mover came from (hand slot / temp slot), else any free slot. */
   _returnToBench(piece, area, idx) {
     if (area === 'hand' && Number.isInteger(idx) && !this.hand[idx]) { this.hand[idx] = piece; return; }
@@ -766,9 +779,17 @@ export class PlayerState {
     const tiles = rangeTiles(grid, row, col, d);
     const targets = tiles.map(([r, c]) => this.board.find((p) => p.row === r && p.col === c)).filter(Boolean);
     const ev = { item: ie.piece, row, col, dir: d, tiles, targets: targets.map(clonePiece), error: null };
-    this.match.meta.emit(this, 'onArt', ev, { item: ie.piece });
-    if (ev.error) throw new ServerError(ev.error, ev.detail || '无效的目标');
+    // the Art leaves the hand first (画卷's copy must find a free slot), and comes back when the use is refused
+    const area = ie.area;
+    const idx = area === 'hand' ? this.hand.findIndex((x) => x && x.uid === itemUid) : this.temp.findIndex((x) => x && x.uid === itemUid);
     this.detach(itemUid);
+    this.match.meta.art(this, ie.piece, ev);
+    if (ev.error) {
+      if (area === 'hand' && idx >= 0 && !this.hand[idx]) this.hand[idx] = ie.piece;
+      else if (area === 'temp' && idx >= 0 && !this.temp[idx]) this.temp[idx] = ie.piece;
+      else this.stow(ie.piece);
+      throw new ServerError(ev.error, ev.detail || '无效的目标');
+    }
     this.artsThisRound += 1;
     this.roundStats.arts += 1;
     this.touch();

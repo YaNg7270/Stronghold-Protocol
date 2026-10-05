@@ -255,6 +255,21 @@ export class MetaHost {
     } finally { this.depth--; }
   }
 
+  /** An Arts item is used (g.art): its own handler, then everyone's onArt. `ev.error` refuses the use. */
+  art(player, item, ev) {
+    const h = this.registry.get(`item:${itemKeyOf(item.id)}`);
+    if (h && typeof h.onArt === 'function') this._call(player, h, h.onArt, { kind: 'item', piece: { uid: item.uid, kind: 'item', id: item.id }, holder: null }, ev, `item art ${item.id}`);
+    if (ev.error) return ev;
+    this.depth++;
+    try {
+      for (const { handler, source } of this._targets(player)) {
+        if (handler === h || typeof handler.onArt !== 'function') continue;
+        this._call(player, handler, handler.onArt, source, ev, 'onArt');
+      }
+    } finally { this.depth--; }
+    return ev;
+  }
+
   /** A loose item was destroyed (reason 'player' | 'replace'): its own handler, then everyone's onDestroy. */
   destroyed(player, item, reason) {
     const ev = { item: { uid: item.uid, kind: 'item', id: item.id }, reason };

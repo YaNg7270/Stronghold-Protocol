@@ -185,3 +185,15 @@ test('机变 draft: a solo round offers 3 cards and a pick moves on to PREP', as
   assert.ok(tryReq(c, 'g.choice', { idx: 0 }));
   assert.equal(c.state.pub.phase, 'PREP');
 });
+
+test('after the result the room can start another match', async () => {
+  const { h, c } = await playMatch({ difficulty: 'FUNNY', seed: 4, rich: false, verbose: false });
+  assert.ok(c.state.result);
+  assert.equal(c.state.room.inMatch, false);
+  c.ok('room.start');
+  assert.equal(c.state.room.inMatch, true);
+  assert.equal(c.state.pub.phase, 'INFO_CHECK');
+  assert.equal(c.state.pub.round, 0);
+  h.advance(30_000);
+  assert.equal(c.state.pub.phase, 'BAND_DRAFT');
+});

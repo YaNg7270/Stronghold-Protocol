@@ -124,7 +124,7 @@ export function roundMods(match, round) {
  * Spawns and routes of a player's battle of round r.
  * @returns {{ waveId: string|null, routes: any[], spawns: any[], maxPlayTime: number|null, overrides: any, dp: any }}
  */
-export function roundSpawns(match, player, round, { bossLike = false } = {}) {
+export function roundSpawns(match, player, round) {
   const waveId = templateFor(match, round);
   const tpl = waveId ? match.data.wave(waveId) : null;
   if (!tpl) return { waveId, routes: [], spawns: [], maxPlayTime: null, overrides: {}, dp: null };
@@ -132,8 +132,11 @@ export function roundSpawns(match, player, round, { bossLike = false } = {}) {
   let spawns = substitute(match, conv.spawns, round);
   // 炎佑 (enemy_9012_acloon) is never an enemy (generation note)
   spawns = spawns.filter((s) => s.enemyKey !== 'enemy_9012_acloon');
-  const scale = bossLike && match.data.config.bossHpScale?.unaffectedByEnemyScale ? null : roundMods(match, round);
-  if (scale) spawns = spawns.map((s) => (s.tag === 'boss' ? s : { ...s, mods: { ...scale, ...(s.mods || {}) } }));
+  // the round's enemy scaling; the leader itself is unaffected (config.bossHpScale.unaffectedByEnemyScale: its HP is
+  // the shared pool), its escorts are scaled like any enemy of the round
+  const scale = roundMods(match, round);
+  const leaderExempt = match.data.config.bossHpScale?.unaffectedByEnemyScale !== false;
+  if (scale) spawns = spawns.map((s) => (s.tag === 'boss' && leaderExempt ? s : { ...s, mods: { ...scale, ...(s.mods || {}) } }));
   // the player's bounties (机变 悬赏): extra enemies on the next battles
   for (const b of player.bounties) {
     if (!(b.roundsLeft > 0)) continue;

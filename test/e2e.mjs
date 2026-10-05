@@ -136,16 +136,41 @@ try {
     console.log(`R${s.round} bought`, bought, 'deployed', deployed);
     await page.waitForTimeout(1500);
     await shot(`r${s.round}-deployed`);
+    if (args.reload && r === 1) {
+      // P6: a reload in the middle of the prep keeps the match (the Worker restores it from IndexedDB)
+      const before = (await state()).priv.board.map((p) => p.uid).sort();
+      await page.waitForTimeout(2500);
+      await page.reload({ waitUntil: 'load' });
+      const back = await waitPhase('PREP', 30000);
+      const after = back.priv.board.map((p) => p.uid).sort();
+      console.log('reload in prep: board', JSON.stringify(before) === JSON.stringify(after) ? 'kept' : `CHANGED ${before} → ${after}`);
+      if (JSON.stringify(before) !== JSON.stringify(after)) errors.push('reload lost the board');
+      await page.waitForTimeout(2000);
+      await shot('r1-after-reload');
+    }
     console.log('ready', await req('g.ready', { ready: true }));
     s = await waitPhase(['COMBAT', 'FINAL_ASSAULT', 'HIDDEN_CORE']);
     await page.waitForTimeout(6000);
     await shot(`r${s.round}-combat`);
+    if (args.reload && r === 1) {
+      // a reload in the middle of the battle: the battle is resent (b.start, elapsed) and still settles
+      await page.waitForTimeout(2500);
+      await page.reload({ waitUntil: 'load' });
+      await waitPhase(['COMBAT', 'SETTLE', 'ROUND_START', 'PREP'], 30000);
+      await page.waitForTimeout(3000);
+      await shot('r1-combat-after-reload');
+      console.log('reload in combat: phase', (await state()).phase);
+    }
     s = await waitPhase(['SETTLE', 'ROUND_START', 'PREP', 'RESULT'], 120000);
     await page.waitForTimeout(800);
     await shot(`r${s.round}-after`);
     const st = await state();
     console.log(`R${s.round}: lp=${st.priv?.lp} funds=${st.priv?.funds} phase=${st.phase}`);
-    if (st.result) break;
+    if (st.result) {
+      await page.waitForTimeout(3000);
+      await shot('result');
+      break;
+    }
   }
 } catch (err) {
   errors.push(`flow: ${err.message}`);

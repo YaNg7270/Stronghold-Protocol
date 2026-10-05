@@ -733,6 +733,7 @@ export class PlayerState {
     }
     this.detach(itemUid);
     holder.items.push({ uid: item.uid, id: item.id });
+    this.stats.itemsEquipped = (this.stats.itemsEquipped || 0) + 1;
     this.touch();
     this.match.meta.equipped(this, item, holder, { consumed: false });
     this.touch();

@@ -123,6 +123,8 @@ export class Match {
     }
     for (const p of this.players) {
       if (!p.dirty || p.isBot) continue;
+      // price modifiers can change with the state (远见's latched discount, 休露丝's first purchase of the round …)
+      try { p.reprice(); } catch (err) { this.log.warn('reprice failed', err); }
       p.dirty = false;
       this.push(p.playerId, { t: 'm.private', ...p.privateView() });
     }
@@ -554,6 +556,7 @@ export class Match {
         if (pr.coins > 0) p.addFunds(Math.trunc(pr.coins));
       }
       this.meta.battleEnd?.(p, { battle: b, result: pr, perfect: !!pr?.perfect && counted === 0, leaks: counted });
+      if (!bossLike && counted === 0) p.stats.perfectRounds = (p.stats.perfectRounds || 0) + 1;
       p.pendingLp = null;
       p.lastBattle = { round: this.round, kind: b.kind, killed: pr?.killed ?? b.progress.killed, total: pr?.total ?? b.progress.total, leaks: counted, perfect: !!pr?.perfect };
       p.touch();
@@ -596,13 +599,26 @@ export class Match {
     this._startRound(this.round + 1);
   }
 
-  /** 隐秘核心 (config.hiddenCore): only on its difficulties, with team LP left, when the mode has a hidden round. */
+  /**
+   * 隐秘核心 (config.hiddenCore): only on its difficulties, after the leader fell with team LP left, and when the team
+   * reached the threshold (`single` 350 / `multi` 1200). [ASSUMED] the threshold counts the layers of the active bonds
+   * of every surviving player (the data names no stat; "达成特定条件" in bosses.json) — see docs/offline-notes.md.
+   */
   _hiddenUnlocked() {
     const hc = this.data.config.hiddenCore || {};
     if (!this.hiddenRound || !this.hiddenBossId) return false;
     if (Array.isArray(hc.difficulties) && !hc.difficulties.includes(this.difficulty)) return false;
-    const lp = this.alivePlayers().reduce((s, p) => s + p.lp, 0);
-    return lp > (hc.minTeamLpExclusive ?? 0);
+    const alive = this.alivePlayers();
+    const lp = alive.reduce((s, p) => s + p.lp, 0);
+    if (!(lp >= (hc.minTeamLpExclusive ?? 1))) return false;
+    const need = this.roomMode === 'solo' ? (hc.single ?? 0) : (hc.multi ?? 0);
+    const layers = alive.reduce((s, p) => s + p.bondEntries().filter((b) => b.active).reduce((a, b) => a + (b.layers || 0), 0), 0);
+    if (layers < need) {
+      for (const p of alive) this.toast(p.playerId, `已激活盟约层数 ${layers}/${need}，未能进入隐秘核心`, 'info');
+      return false;
+    }
+    this.ticker('满足条件，进入隐秘核心', { type: 'HIDDEN', priority: 5 });
+    return true;
   }
 
   _finish() {
@@ -616,10 +632,10 @@ export class Match {
       players: this.players.map((p) => ({
         playerId: p.playerId, seat: p.seat, name: p.name, isBot: p.isBot, alive: p.alive, lp: p.lp, bandId: p.bandId,
         roundsPassed: p.stats.roundsPassed,
-        title: null,
+        title: titleFor(this.data.config, p, resultStats(p), this.victory),
         lineup: p.board.filter((x) => x.kind === 'chess').map((x) => ({ kind: 'chess', id: x.id, golden: !!x.golden, tier: x.tier })),
         bonds: p.bondEntries().filter((b) => b.active || b.layers > 0).map((b) => ({ bondId: b.bondId, layers: b.layers, active: b.active })),
-        stats: { ...p.stats },
+        stats: resultStats(p),
         trophies: 0,
         reward: rewardOf(this.data.config, roundsPassed, this.difficulty, this.mode.type),
       })),
@@ -802,6 +818,36 @@ function resolveLoadoutSafe(loadout, rec, getChess) {
 }
 
 import { resolveLoadout as resolveLoadoutFn, unitStatsEntry } from '../../../shared/protocol.js';
+
+/** The result card's stats (js/screens/result.js STAT_ROWS keys). */
+function resultStats(p) {
+  const activatedLayers = p.bondEntries().filter((b) => b.active).reduce((s, b) => s + (b.layers || 0), 0);
+  return {
+    dmgDealt: Math.round(p.stats.damage), kills: p.stats.kills, bossDamage: Math.round(p.stats.bossDamage), activatedLayers,
+    merges: p.stats.merges, itemsEquipped: p.stats.itemsEquipped || 0, gold: p.stats.spent, perfectRounds: p.stats.perfectRounds || 0,
+    refreshes: p.stats.refreshes, leaks: p.stats.leaks, lpLost: p.stats.lpLost,
+  };
+}
+
+/**
+ * The 评语 of a solo player (config.titles; titleRule ranks teammates — alone, every category is "best", so the
+ * strongest showing wins): 卫戍之星 on a win with leader damage, else the first category above its bar.
+ */
+function titleFor(config, p, st, victory) {
+  const titles = Array.isArray(config.titles) ? config.titles : [];
+  const has = (id) => titles.some((t) => t.id === id);
+  const lpRemaining = p.lp;
+  const order = [
+    ['comment_1', victory && st.bossDamage > 0],
+    ['comment_4', st.merges >= 4],
+    ['comment_2', st.activatedLayers >= 60],
+    ['comment_3', lpRemaining >= 20],
+    ['comment_5', st.itemsEquipped >= 6],
+    ['comment_6', st.gold > 0],
+  ];
+  const hit = order.find(([id, ok]) => ok && has(id));
+  return hit ? hit[0] : null;
+}
 
 function rewardOf(config, roundsPassed, difficulty, type) {
   const r = config.rewards || {};

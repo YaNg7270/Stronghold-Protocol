@@ -2,7 +2,7 @@
 import { createHarness } from './harness.mjs';
 import { playPrep, tryReq } from './bot.mjs';
 
-export async function playMatch({ difficulty = 'NORMAL', seed = 1, verbose = true, band = null } = {}) {
+export async function playMatch({ difficulty = 'NORMAL', seed = 1, verbose = true, band = null, rich = false } = {}) {
   const h = await createHarness({ seed });
   const c = h.client('测试博士');
   const w = c.hello();
@@ -26,6 +26,12 @@ export async function playMatch({ difficulty = 'NORMAL', seed = 1, verbose = tru
         break;
       }
       case 'PREP': {
+        if (rich) {
+          // test-only: a generous budget so the late rounds (boss, hidden core) are reached
+          const m = [...h.server.rooms.values()][0].match;
+          const p = m.players[0];
+          if (p.counters.__richRound !== pub.round) { p.counters.__richRound = pub.round; p.funds += 40; p.touch(); m.flush(); }
+        }
         playPrep(h, c);
         if (!tryReq(c, 'g.ready', { ready: true })) throw new Error(`ready refused ${JSON.stringify(c.lastError)}`);
         break;
@@ -51,7 +57,8 @@ export async function playMatch({ difficulty = 'NORMAL', seed = 1, verbose = tru
 if (process.argv[1] && process.argv[1].endsWith('play.mjs')) {
   const difficulty = process.argv[2] || 'NORMAL';
   const seed = Number(process.argv[3] || 1);
+  const rich = process.argv.includes('--rich');
   const t0 = Date.now();
-  const { result, c } = await playMatch({ difficulty, seed });
+  const { result, c } = await playMatch({ difficulty, seed, rich, verbose: !process.argv.includes('--quiet') });
   console.log(`result: victory=${result?.victory} rounds=${result?.roundsPassed}/${result?.lastRound} lp=${c.state.priv.lp} hidden=${result?.hiddenReached}/${result?.hiddenCleared} in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 }

@@ -592,14 +592,13 @@ export class PlayerState {
     if (p.kind === 'item') throw new ServerError(ERR.BAD_TARGET, '装备无法出售');
     if (p.kind === 'token') throw new ServerError(ERR.BAD_TARGET, '召唤物无法出售');
     const price = this.data.chessSellPrice(p.id);
-    this.match.meta.emit(this, 'onSoldBefore', { piece: p });
     this._removeTokensOf(p.uid);
     this.detach(uid);
     for (const it of p.items || []) this.stow({ uid: it.uid, kind: 'item', id: it.id });
     this.match.pool.giveBack(p.id, this.match.pool.copiesOf(p.id));
-    this.addFunds(price);
     this.roundStats.sells += 1;
-    this.match.meta.sold(this, p, e.area);
+    const ev = this.match.meta.sold(this, p, e.area, { piece: { ...p, area: e.area }, gain: price, kind: 'chess' });
+    this.addFunds(Math.max(0, Math.trunc(Number(ev?.gain ?? price) || 0)));
     delete this.pieceCounters[uid];
     this.touch();
     return {};
@@ -613,7 +612,7 @@ export class PlayerState {
     this.detach(uid);
     const refund = this.data.economy.itemDestroyRefund ?? 0;
     if (refund) this.addFunds(refund);
-    this.match.meta.emit(this, 'onDestroy', { item: e.piece, reason: 'player' }, { item: e.piece });
+    this.match.meta.destroyed(this, e.piece, 'player');
     this.touch();
     return {};
   }
@@ -729,7 +728,7 @@ export class PlayerState {
       const ri = Number.isInteger(replaceUid) ? holder.items.findIndex((x) => x.uid === replaceUid) : 0;
       if (ri < 0) throw new ServerError(ERR.BAD_TARGET, '无效的目标');
       const [old] = holder.items.splice(ri, 1);
-      this.match.meta.emit(this, 'onDestroy', { item: { uid: old.uid, kind: 'item', id: old.id }, reason: 'replace' }, { item: old });
+      this.match.meta.destroyed(this, { uid: old.uid, kind: 'item', id: old.id }, 'replace');
     }
     this.detach(itemUid);
     holder.items.push({ uid: item.uid, id: item.id });

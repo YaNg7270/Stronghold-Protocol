@@ -531,19 +531,20 @@ export class Match {
       p.touch();
     }
     if (bossLike) {
-      const cleared = this.bossHp && this.bossHp.hp <= 0;
-      // the merged team LP is what survives the boss round
+      // the merged team LP is what survives the boss round; the leader must fall before it runs out
       const lp = Math.max(0, this.teamLp ?? 0);
+      const cleared = !!(this.bossHp && this.bossHp.hp <= 0) && lp > 0;
       for (const p of this.alivePlayers()) p.lp = lp;
-      if (row.isHidden) { this.hiddenReached = true; this.hiddenCleared = !!cleared; }
-      else this.victory = !!cleared;
-      this._bossCleared = !!cleared;
+      if (row.isHidden) { this.hiddenReached = true; this.hiddenCleared = cleared; }
+      else this.victory = cleared;
+      this._bossCleared = cleared;
       this.overtimeAt = 0;
     }
     for (const p of this.alivePlayers()) {
       if (p.lp <= 0) { p.alive = false; p.status = 'dead'; this.ticker(`${p.name} 的防线已被突破`, { type: 'DEAD', playerId: p.playerId }); }
       else {
-        p.stats.roundsPassed = this.round;
+        // a boss round only counts when its leader fell; the hidden round never adds to the rounds passed
+        if (!bossLike || this._bossCleared) p.stats.roundsPassed = Math.min(this.lastRound, Math.max(p.stats.roundsPassed, this.round));
         p.status = 'acting';
       }
       p.expireOffers();

@@ -134,3 +134,9 @@ WebSocketShim.prototype = NativeWebSocket ? NativeWebSocket.prototype : OfflineS
 
 globalThis.WebSocket = WebSocketShim;
 globalThis.__SP_OFFLINE__ = { version: 1, worker: () => worker };
+
+// The lobby remembers its mode (js/store.js loadPref 'lobby.mode', default co-op): offline plays solo only, so a first
+// visit starts on 独立模拟.
+try {
+  if (globalThis.localStorage && localStorage.getItem('sp.pref.lobby.mode') == null) localStorage.setItem('sp.pref.lobby.mode', JSON.stringify('solo'));
+} catch { /* storage blocked: the lobby keeps its default */ }

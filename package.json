@@ -1,0 +1,20 @@
+{
+  "name": "stronghold-protocol-offline",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Offline single-player port of 卫戍协议：盟约 (web remake): mirror + in-browser local game server",
+  "type": "module",
+  "scripts": {
+    "mirror": "node tools/mirror/mirror.mjs && node tools/link.mjs",
+    "serve": "node tools/serve.mjs",
+    "test": "node --test test/"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "https-proxy-agent": "^7.0.6",
+    "playwright-core": "^1.56.1",
+    "ws": "^8.22.0"
+  }
+}

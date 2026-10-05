@@ -452,6 +452,16 @@ export class Match {
   }
 
   _bossTick(now) {
+    const ended = (this.bossHp && this.bossHp.hp <= 0) || (this.teamLp != null && this.teamLp <= 0);
+    if (ended) {
+      if (!this._bossEndAt) this._bossEndAt = now + 8000;
+      else if (now >= this._bossEndAt) {
+        this._bossEndAt = 0;
+        for (const b of this.battles.values()) if (b.round === this.round && !b.done) { b.done = true; this.push(b.playerId, { t: 'b.end', battleId: b.battleId, fieldId: b.fieldId, reason: 'forced' }); }
+        this._maybeSettle();
+        return;
+      }
+    }
     if (!this.overtimeAt || now < this.overtimeAt + 1000) return;
     const perSec = this.data.config.bossOvertimeDrainPerSec ?? 1;
     const lost = Math.floor((now - this.overtimeAt) / 1000) * perSec;
@@ -482,16 +492,33 @@ export class Match {
   }
 
   _combatTimeout(now) {
-    // the battle's time limit passed: wait a little longer for the result, then settle from the last progress
+    // the battle's time limit passed: wait a little longer for the client's result, then take the battle over —
+    // simulated here with the same deterministic sim and spec (the online server's takeover)
     const late = [...this.battles.values()].filter((b) => b.round === this.round && !b.done);
     if (!late.length) { this._maybeSettle(); return; }
     if (!this._graceUntil) { this._graceUntil = now + RESULT_GRACE_MS; this.deadline = this._graceUntil; return; }
-    for (const b of late) {
-      b.done = true;
-      this.push(b.playerId, { t: 'b.end', battleId: b.battleId, fieldId: b.fieldId, reason: 'timeout' });
-    }
+    for (const b of late) this._takeover(b);
     this._graceUntil = 0;
     this._maybeSettle();
+  }
+
+  /** Simulate a battle to its end on the server (its client never reported). */
+  _takeover(b) {
+    b.done = true;
+    this.push(b.playerId, { t: 'b.end', battleId: b.battleId, fieldId: b.fieldId, reason: 'takeover' });
+    const spec = this.sim?.spec;
+    if (!spec || b.kind !== 'normal') return;
+    try {
+      const quiet = { error() {}, warn() {}, info() {}, debug() {} };
+      const battle = spec.createBattleFromSpec(b.spec, this.sim.ds, { logger: quiet, recordEvents: false });
+      for (let i = 0; i < 60 * 60 * 30 && !battle.finished; i++) battle.step();
+      if (!battle.finished) battle.forceEnd('timeout');
+      b.result = spec.compactResult(battle.result());
+      const pr = b.result.perPlayer?.[b.playerId];
+      if (pr) b.progress = { ...b.progress, killed: pr.killed, total: pr.total, done: true };
+    } catch (err) {
+      this.log.warn('battle takeover failed', err);
+    }
   }
 
   _maybeSettle() {
@@ -502,6 +529,7 @@ export class Match {
   }
 
   _settle(battles) {
+    this._bossEndAt = 0;
     const row = this.roundRow();
     const bossLike = !!(row.isBoss || row.isHidden);
     for (const b of battles) {
@@ -602,6 +630,31 @@ export class Match {
     this.flush();
   }
 
+  /**
+   * The stats the player's board units start their next battle with (g.unitStats → m.unitStats): the battle is built
+   * from the player's input without enemies and started (deployment, battle-start effects of bonds, items, 特质, the
+   * strategy and 机变 cards), then every own unit is read (shared/protocol.js unitStatsEntry).
+   */
+  unitStats(p) {
+    const spec = this.sim?.spec;
+    if (!spec || !p.board.length) return [];
+    try {
+      const input = this._playerInput(p, 'normal');
+      const battleSpec = spec.buildBattleSpec({
+        battleId: 'stats', fieldId: `n:${p.playerId}`, kind: 'normal', seed: this.seed, modeId: this.modeId, round: this.round,
+        stageId: this.stageId, rect: { ...GEO.NORMAL_RECT }, timeLimit: 60, players: [input], spawns: [], routes: [], content: 'full',
+      });
+      const quiet = { error() {}, warn() {}, info() {}, debug() {} };
+      const battle = spec.createBattleFromSpec(battleSpec, this.sim.ds, { logger: quiet, recordEvents: false });
+      battle.autoFinish = false;
+      if (typeof battle.start === 'function') battle.start(); else battle.step();
+      return (battle.allyUnits || []).filter((u) => u && Number.isInteger(u.uid) && u.ownerId === p.playerId).map((u) => unitStatsEntry(u, u.s));
+    } catch (err) {
+      this.log.warn('unit stats failed', err);
+      return [];
+    }
+  }
+
   // ---- intents -------------------------------------------------------------------------------------------------------
 
   handle(playerId, msg) {
@@ -613,7 +666,7 @@ export class Match {
     if (t === 'b.result') return this._result(p, msg);
     if (t === 'g.emote') { this.pushAll({ t: 'm.emote', playerId, id: msg.id }); return {}; }
     if (t === 'g.watch') return {};
-    if (t === 'g.unitStats') { this.push(playerId, { t: 'm.unitStats', seq: msg.seq ?? 0, round: this.round, units: [] }); return {}; }
+    if (t === 'g.unitStats') { this.push(playerId, { t: 'm.unitStats', seq: msg.seq ?? 0, round: this.round, units: this.unitStats(p) }); return {}; }
     if (t === 'g.pause') return this._pause(!!msg.on);
     if (t === 'g.autoplay') { p.autoplay = !!msg.on; p.touch(); return {}; }
     if (!p.alive) throw new ServerError(ERR.ELIMINATED, '你已被淘汰');
@@ -702,7 +755,7 @@ export class Match {
       battles: [...this.battles.values()],
       players: this.players.map((p) => {
         const o = {};
-        for (const k of Object.keys(p)) if (k !== 'match' && k !== 'data') o[k] = p[k];
+        for (const k of Object.keys(p)) if (k !== 'match' && k !== 'data' && k !== '_bondsCache') o[k] = p[k];
         return o;
       }),
     });
@@ -748,7 +801,7 @@ function resolveLoadoutSafe(loadout, rec, getChess) {
   }
 }
 
-import { resolveLoadout as resolveLoadoutFn } from '../../../shared/protocol.js';
+import { resolveLoadout as resolveLoadoutFn, unitStatsEntry } from '../../../shared/protocol.js';
 
 function rewardOf(config, roundsPassed, difficulty, type) {
   const r = config.rewards || {};

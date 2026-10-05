@@ -71,7 +71,7 @@ export class PlayerState {
 
   nextUid() { return this.match.nextUid(); }
 
-  touch() { this.dirty = true; this.match.publicDirty = true; }
+  touch() { this.dirty = true; this._bondsCache = null; this.match.publicDirty = true; }
 
   /** Every owned piece with its area: [{ piece, area, idx? }]. */
   allPieces() {
@@ -440,6 +440,7 @@ export class PlayerState {
     // a merged item stays where an equipped copy was (on its carrier), else goes to the hand
     if (holder && (holder.items || []).length < (this.data.economy.equipPerChess ?? 2) && itemAttaches(this.data.item(goldenId))) {
       holder.items.push({ uid: golden.uid, id: goldenId });
+      this.touch();
     } else if (!this.stow(golden)) {
       return null;
     }
@@ -732,6 +733,7 @@ export class PlayerState {
     }
     this.detach(itemUid);
     holder.items.push({ uid: item.uid, id: item.id });
+    this.touch();
     this.match.meta.equipped(this, item, holder, { consumed: false });
     this.touch();
     return {};
@@ -745,6 +747,7 @@ export class PlayerState {
     if ((he.piece.items || []).length >= (this.data.economy.equipPerChess ?? 2)) return false;
     this.detach(itemUid);
     he.piece.items.push({ uid: ie.piece.uid, id: ie.piece.id });
+    this.touch();
     this.touch();
     return true;
   }
@@ -773,7 +776,10 @@ export class PlayerState {
 
   // ---- bonds -------------------------------------------------------------------------------------------------------
 
-  bondEntries() { return computeBonds(this.match, this); }
+  bondEntries() {
+    if (!this._bondsCache) this._bondsCache = computeBonds(this.match, this);
+    return this._bondsCache;
+  }
 
   /** Bond state map for the battle spec: { bondId: { count, active, tier, layers } }. */
   battleBonds() {

@@ -7,7 +7,7 @@
   "scripts": {
     "mirror": "node tools/mirror/mirror.mjs && node tools/link.mjs",
     "serve": "node tools/serve.mjs",
-    "test": "node --test test/"
+    "test": "node --test test/*.test.mjs"
   },
   "engines": {
     "node": ">=20"

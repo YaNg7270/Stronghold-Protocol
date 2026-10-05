@@ -39,6 +39,13 @@ export function playPrep(h, c) {
   }
   for (const p of c.state.priv.temp) if (p && p.kind === 'chess') tryReq(c, 'g.sell', { uid: p.uid });
   for (const p of c.state.priv.temp) if (p && p.kind === 'item') tryReq(c, 'g.destroy', { uid: p.uid });
+  // summons (and anything left) move into free hand slots; a summon whose owner is gone has no slot: its owner is sold
+  for (const p of c.state.priv.temp) {
+    if (!p) continue;
+    const idx = c.state.priv.hand.findIndex((x) => !x);
+    if (idx >= 0 && tryReq(c, 'g.move', { uid: p.uid, to: { area: 'hand', idx } })) continue;
+    if (p.kind === 'token' && Number.isInteger(p.ownerUid)) tryReq(c, 'g.sell', { uid: p.ownerUid });
+  }
 }
 
 function ctxOf(h, c) {

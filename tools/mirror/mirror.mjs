@@ -90,13 +90,14 @@ function curl(url, dest, { headers = [] } = {}) {
 }
 
 /** Download one URL to a file, verified; returns 'ok' | 'skip' | 'missing' | 'fail'. */
-async function download(url, dest, key, opts) {
+async function download(url, dest, key, opts = {}) {
   const known = state.files[key];
   if (known && fs.existsSync(dest) && fs.statSync(dest).size === known.size) return 'skip';
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   const tmp = dest + '.part';
   let last = null;
-  for (let i = 0; i < TRIES; i++) {
+  const tries = opts.tries ?? TRIES;
+  for (let i = 0; i < tries; i++) {
     last = await curl(url, tmp, opts);
     if (last.code === 0 && last.status === 200) {
       const size = fs.statSync(tmp).size;
@@ -215,15 +216,21 @@ async function fetchGoogleFonts() {
   if (!m) { console.log('  no Google Fonts link'); return []; }
   const cssUrl = m[1].replace(/&amp;/g, '&');
   const cssFile = path.join(OUT, 'fonts/google/google-fonts.css');
-  const r = await download(cssUrl, cssFile, 'google-fonts.css', { headers: [`User-Agent: ${BROWSER_UA}`] });
-  if (r === 'fail' || r === 'missing') return ['google fonts css'];
+  const r = await download(cssUrl, cssFile, 'google-fonts.css', { headers: [`User-Agent: ${BROWSER_UA}`], tries: 2 });
+  if (r === 'fail' || r === 'missing') {
+    // optional: unreachable Google Fonts (e.g. in mainland China) only means system fonts are used
+    console.log('  Google Fonts unreachable — skipped (the game falls back to system fonts)');
+    return [];
+  }
   let css = fs.readFileSync(cssFile, 'utf8');
   const urls = [...new Set([...css.matchAll(/url\((https:\/\/fonts\.gstatic\.com\/[^)]+)\)/g)].map((x) => x[1]))];
   const names = urls.map((u) => 'f/' + u.replace('https://fonts.gstatic.com/', '').replace(/[^\w.-]/g, '_'));
-  const res = await pool(urls, (u) => download(u, path.join(OUT, 'fonts/google', names[urls.indexOf(u)]), u));
+  const res = await pool(urls, (u) => download(u, path.join(OUT, 'fonts/google', names[urls.indexOf(u)]), u, { tries: 2 }));
   urls.forEach((u, i) => { css = css.split(u).join(names[i]); });
   fs.writeFileSync(path.join(OUT, 'fonts/google/fonts.css'), css);
-  return urls.filter((u, i) => res[i] === 'fail' || res[i] === 'missing');
+  const missing = urls.filter((u, i) => res[i] === 'fail' || res[i] === 'missing');
+  if (missing.length) console.log(`  ${missing.length} font files unreachable — those glyphs fall back to system fonts`);
+  return [];
 }
 
 // ---- main ---------------------------------------------------------------------------------------------------------

@@ -1,50 +1,71 @@
-// The offline game server's Worker (started by offline/shim.js).
+// The offline game server's worker (started by offline/shim.js) — a SharedWorker when the browser has one (every tab
+// of the game talks to the same server and the same save), else a dedicated Worker.
 //
 // Loads /data/*.json once, installs it into the sim (the same frozen data the client's battle runner uses), restores
-// the saved server state from IndexedDB (a reload or a closed tab resumes the running match: P6) and bridges the shim's
+// the saved server state from IndexedDB (a reload or a closed tab resumes the running match) and bridges the shim's
 // sockets to GameServer:
-//   shim → worker  { id, type: 'connect' | 'msg' | 'close', data? }
-//   worker → shim  { id, type: 'open' | 'msg' | 'close', data?, code?, reason? }  ·  { type: 'log', level, args }
+//   page → worker  { id, type: 'connect' | 'msg' | 'close', data? }
+//   worker → page  { id, type: 'open' | 'msg' | 'close', data?, code?, reason? }  ·  { type: 'log', level, args }
 
-import { loadGameData } from './server/data.js';
-import { GameServer } from './server/index.js';
-import { installSim } from './server/sim.js';
-import { openStore } from './server/storage.js';
+// No static imports: the server's module graph has top-level await (sim/content/index.js), and a message (or a
+// SharedWorker connect) that arrives while a module is still evaluating would find no handler and be lost. The
+// handlers below are installed synchronously; the server is imported in boot() and the early messages are queued.
 
-const post = (m) => self.postMessage(m);
-const log = {
-  info: (...a) => post({ type: 'log', level: 'info', args: a.map(String) }),
-  warn: (...a) => post({ type: 'log', level: 'warn', args: a.map(String) }),
-  error: (...a) => post({ type: 'log', level: 'error', args: a.map((x) => (x && x.stack) || String(x)) }),
-};
-
+/** Connected pages: each is a MessagePort-like { postMessage }. */
+const pages = new Set();
 const conns = new Map();
 const queue = [];
 let server = null;
+let pageSeq = 0;
 
-function onMessage(m) {
+const broadcast = (m) => { for (const pg of pages) { try { pg.port.postMessage(m); } catch { /* closed */ } } };
+const log = {
+  info: (...a) => broadcast({ type: 'log', level: 'info', args: a.map(String) }),
+  warn: (...a) => broadcast({ type: 'log', level: 'warn', args: a.map(String) }),
+  error: (...a) => broadcast({ type: 'log', level: 'error', args: a.map((x) => (x && x.stack) || String(x)) }),
+};
+
+function onMessage(pg, m) {
   if (!m || typeof m !== 'object') return;
-  if (!server) { queue.push(m); return; }
+  if (!server) { queue.push([pg, m]); return; }
+  const key = `${pg.id}:${m.id}`;
   if (m.type === 'connect') {
-    const id = m.id;
     const conn = server.connect(
-      (obj) => post({ id, type: 'msg', data: JSON.stringify(obj) }),
-      (code, reason) => { conns.delete(id); post({ id, type: 'close', code, reason }); },
+      (obj) => pg.port.postMessage({ id: m.id, type: 'msg', data: JSON.stringify(obj) }),
+      (code, reason) => { conns.delete(key); pg.port.postMessage({ id: m.id, type: 'close', code, reason }); },
     );
-    conns.set(id, conn);
-    post({ id, type: 'open' });
+    conns.set(key, conn);
+    pg.port.postMessage({ id: m.id, type: 'open' });
   } else if (m.type === 'msg') {
-    conns.get(m.id)?.message(m.data);
+    conns.get(key)?.message(m.data);
   } else if (m.type === 'close') {
-    const c = conns.get(m.id);
-    conns.delete(m.id);
+    const c = conns.get(key);
+    conns.delete(key);
     c?.closed();
+  } else if (m.type === 'bye') {
+    // the page is going away (pagehide): its sockets are closed
+    for (const [k, c] of [...conns]) if (k.startsWith(`${pg.id}:`)) { conns.delete(k); c.closed(); }
+    pages.delete(pg);
   }
 }
 
-self.onmessage = (ev) => onMessage(ev.data);
+function attach(port) {
+  const pg = { id: ++pageSeq, port };
+  pages.add(pg);
+  port.onmessage = (ev) => onMessage(pg, ev.data);
+  if (typeof port.start === 'function') port.start();
+}
+
+if (typeof SharedWorkerGlobalScope !== 'undefined' && self instanceof SharedWorkerGlobalScope) {
+  self.onconnect = (ev) => attach(ev.ports[0]);
+} else {
+  attach(self);
+}
 
 async function boot() {
+  const [{ loadGameData }, { GameServer }, { installSim }, { openStore }] = await Promise.all([
+    import('./server/data.js'), import('./server/index.js'), import('./server/sim.js'), import('./server/storage.js'),
+  ]);
   const data = await loadGameData(async (name) => {
     for (let i = 0; i < 3; i++) {
       try {
@@ -65,10 +86,10 @@ async function boot() {
     clearInterval: (h) => clearInterval(h),
   }).start();
   log.info('offline game server ready');
-  for (const m of queue.splice(0)) onMessage(m);
+  for (const [pg, m] of queue.splice(0)) onMessage(pg, m);
 }
 
 boot().catch((err) => {
   log.error('offline game server failed to start', err);
-  for (const m of queue.splice(0)) if (m.type === 'connect') post({ id: m.id, type: 'close', code: 1011, reason: 'server failed to start' });
+  for (const [pg, m] of queue.splice(0)) if (m.type === 'connect') pg.port.postMessage({ id: m.id, type: 'close', code: 1011, reason: 'server failed to start' });
 });
